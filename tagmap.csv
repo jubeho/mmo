@@ -1,0 +1,10 @@
+MMO;VORBISCOMMENT;ID3v2.3;mediainfo;ID3v2.2;ID3v2.4;ID3v1;
+AlbArtist;ALBUMARTIST;TPE2;Album/Performer;TP2;TPE2;;
+Album;ALBUM;"TALB";Album;TAL;TALB;;
+CDNum;DISCNUMBER;"TPOS";Part/Position;TPA;TPOS;;
+"Year";DATE;"TYER";Recorded date;TYE;TYER;;
+Artist;ARTIST;"TPE1";Performer;TP1;TPE1;;
+Title;TITLE;"TIT2";Track name;TT2;TIT2;;
+TrackNum;TRACKNUMBER;"TRCK";Track name/Position;TRK;TRCK;;
+Genre;GENRE;"TCON";Genre;TCO;TCON;;
+Comment;COMMENT;"COMM";Comment;COM;COMM;;

@@ -1,0 +1,439 @@
+package mmo
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/bogem/id3v2/v2"
+	"github.com/dhowden/tag"
+	log "github.com/sirupsen/logrus"
+
+	"github.com/go-flac/flacvorbis"
+	flac3 "github.com/go-flac/go-flac"
+)
+
+func (mmo *MyMusicOrga) GetTags(fp string) (*AudioFile, error) {
+	var af *AudioFile
+	var err error
+
+	if strings.HasSuffix(fp, ".flac") {
+		af, err = mmo.MakeAudioFileFromFlac(fp)
+		if err != nil {
+			return nil, err
+		}
+		return af, nil
+		//return mmo.MakeAudioFileFromFlac(fp)
+	}
+
+	if strings.HasSuffix(fp, ".mp3") {
+		af, err = mmo.MakeAudioFileFromMP3Bogem(fp)
+		if err == nil {
+			return af, err
+		}
+		if err == id3v2.ErrUnsupportedVersion {
+			log.Debugf("bogem id3v2 unsupported file: %v", err)
+			return mmo.MakeAudioFileFromMP3DHowden(fp)
+		}
+	}
+	return nil, nil
+}
+func (mmo *MyMusicOrga) MakeAudioFileFromMP3Bogem(fp string) (*AudioFile, error) {
+	tag, err := id3v2.Open(fp, id3v2.Options{Parse: true})
+	if err != nil {
+		return nil, fmt.Errorf("could not open mp3 file %s: %v", fp, err)
+	}
+	defer tag.Close()
+
+	af := NewAudioFile(fp)
+	tagVersion := fmt.Sprintf("ID3v2.%d", tag.Version())
+	af.FrameTypeSource = tagVersion
+	af.Filetype = "MP3"
+
+	for frameName, allFrames := range tag.AllFrames() {
+		for _, frmr := range allFrames {
+			tFrame, ok := frmr.(id3v2.TextFrame)
+			if ok {
+				mmoTag, _ := mmo.TagMapping.GetTag(tagVersion, frameName, "MMO")
+				switch mmoTag {
+				case "AlbArtist":
+					af.AlbArtist = tFrame.Text
+				case "Album":
+					af.Album = tFrame.Text
+				case "CDNum":
+					af.CDNum = tFrame.Text
+				case "Year":
+					af.Year = tFrame.Text
+				case "Artist":
+					af.Artist = tFrame.Text
+				case "Title":
+					af.Title = tFrame.Text
+				case "TrackNum":
+					af.TrackNum = tFrame.Text
+				case "Genre":
+					af.Genre = tFrame.Text
+				case "Comment":
+
+				case "Pic":
+				case "":
+					af.ExtendedTags = append(af.ExtendedTags, []string{frameName, tFrame.Text})
+					mmo.FrameVariantsAdditional[frameName] = append(mmo.FrameVariantsAdditional[frameName], af)
+				}
+			}
+		}
+	}
+	mmo.FrameTypes[af.FrameTypeSource] = append(mmo.FrameTypes[af.FrameTypeSource], af)
+	mmo.AudiofileTypes["MP3"] = append(mmo.AudiofileTypes["MP3"], af)
+	mmo.Genres[af.Genre] = append(mmo.Genres[af.Genre], af)
+
+	return af, nil
+}
+
+func (mmo *MyMusicOrga) MakeAudioFileFromMP3DHowden(fp string) (*AudioFile, error) {
+	var af *AudioFile
+	// MP3
+	f, err := os.OpenFile(fp, os.O_RDONLY, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("could not read file to get tags %v: %v", fp, err)
+	}
+	defer f.Close()
+
+	md, err := tag.ReadFrom(f)
+	if err != nil {
+		return nil, fmt.Errorf("could not get metadata from file %v: %v", fp, err)
+	}
+
+	switch md.Format() {
+	case tag.ID3v1:
+		if md.FileType() != tag.MP3 {
+			log.Warnf("found id3v1 tag - but file format is not mp3: %v", fp)
+		}
+	case tag.ID3v2_2:
+		if md.FileType() != tag.MP3 {
+			log.Warnf("found id3v2.2 tag - but file format is not mp3: %v", fp)
+		}
+	case tag.MP4:
+		fmt.Println("found mp4 tag - not implemented yet")
+		if md.FileType() != tag.FileType(tag.MP4) {
+			log.Warnf("found MP4 tag - but file format is not mp4: %v", fp)
+		}
+	default:
+		return nil, fmt.Errorf("could not get metadata from file: %v unknown format %v", fp, err)
+	}
+
+	af.FrameTypeSource = string(md.Format())
+	af.Filetype = "MP3"
+
+	for frameName, data := range md.Raw() {
+
+		frameName = strings.ToUpper(frameName)
+
+		if frameName == "APIC" {
+			//fmt.Println("found picure frame...")
+		}
+		if frameName == "COMM" {
+			//fmt.Println("found comment...")
+		}
+		if frameName == "PRIV" {
+			//fmt.Println("found priv picture frame...")
+		}
+		if frameName == "POPM" {
+			//fmt.Println("found popularimeter...")
+		}
+		if strings.HasPrefix(frameName, "TXXX") {
+			//fmt.Println("found txxx frame...")
+		}
+
+		value := ""
+		switch v := data.(type) {
+		case string:
+			value = data.(string)
+		case tag.Picture:
+			fmt.Printf("found picture %v", v)
+			continue
+		}
+
+		mmoTag, _ := mmo.TagMapping.GetTag(fmt.Sprint(md.Format()), frameName, "MMO")
+
+		switch mmoTag {
+		case "AlbArtist":
+			af.AlbArtist = value
+		case "Album":
+			af.Album = value
+		case "CDNum":
+			af.CDNum = value
+		case "Year":
+			af.Year = value
+		case "Artist":
+			af.Artist = value
+		case "Title":
+			af.Title = value
+		case "TrackNum":
+			af.TrackNum = value
+		case "Genre":
+			af.Genre = value
+		case "Comment":
+
+		case "Pic":
+		case "":
+			af.ExtendedTags = append(af.ExtendedTags, []string{frameName, value})
+			mmo.FrameVariantsAdditional[frameName] = append(mmo.FrameVariantsAdditional[frameName], af)
+		}
+	}
+	mmo.FrameTypes[af.FrameTypeSource] = append(mmo.FrameTypes[af.FrameTypeSource], af)
+	mmo.AudiofileTypes["MP3"] = append(mmo.AudiofileTypes["MP3"], af)
+	mmo.Genres[af.Genre] = append(mmo.Genres[af.Genre], af)
+
+	return af, nil
+}
+
+func (mmo *MyMusicOrga) MakeAudioFileFromFlac(fp string) (*AudioFile, error) {
+	f, err := flac3.ParseFile(fp)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse flac file %v: %v", fp, err)
+	}
+
+	af := NewAudioFile(fp)
+	af.FrameTypeSource = "VorbisComment"
+	af.Filetype = "FLAC"
+
+	var cmt *flacvorbis.MetaDataBlockVorbisComment
+	// var cmtIdx int
+	for _, meta := range f.Meta {
+		if meta.Type == flac3.VorbisComment {
+			af.FlacCommentFrameCount++
+			cmt, err = flacvorbis.ParseFromMetaDataBlock(*meta)
+			// cmtIdx = idx
+			if err != nil {
+				panic(err)
+			}
+			// fmt.Println(cmtIdx)
+			for _, c := range cmt.Comments {
+				/*
+					if c == "sepp=mare" {
+						if len(cmt.Comments) > i+1 {
+							cmt.Comments = append(cmt.Comments[:i], cmt.Comments[i+1:]...)
+						} else {
+							cmt.Comments = cmt.Comments[:i]
+						}
+						continue
+					}
+				*/
+				sepIdx := strings.Index(c, "=")
+				if sepIdx < 0 {
+					fmt.Printf("equalindex < 0 for %v\n", c)
+					continue
+				}
+				//fmt.Println(c[:sepIdx], c[sepIdx+1:])
+
+				frameName := strings.ToUpper(c[:sepIdx])
+				value := c[sepIdx+1:]
+				mmoTag, _ := mmo.TagMapping.GetTag("VORBIS", frameName, "MMO")
+
+				switch mmoTag {
+				case "AlbArtist":
+					af.AlbArtist = value
+				case "Album":
+					af.Album = value
+				case "CDNum":
+					af.CDNum = value
+				case "Year":
+					af.Year = value
+				case "Artist":
+					af.Artist = value
+				case "Title":
+					af.Title = value
+				case "TrackNum":
+					af.TrackNum = value
+				case "Genre":
+					af.Genre = value
+				case "Comment":
+
+				case "Pic":
+				case "":
+					af.ExtendedTags = append(af.ExtendedTags, []string{frameName, value})
+					mmo.FrameVariantsAdditional[frameName] = append(mmo.FrameVariantsAdditional[frameName], af)
+				}
+			}
+		}
+	}
+
+	mmo.FrameTypes[af.FrameTypeSource] = append(mmo.FrameTypes[af.FrameTypeSource], af)
+	mmo.AudiofileTypes["FLAC"] = append(mmo.AudiofileTypes["FLAC"], af)
+	mmo.Genres[af.Genre] = append(mmo.Genres[af.Genre], af)
+
+	return af, nil
+}
+
+func (mmo *MyMusicOrga) WriteFile(af *AudioFile) error {
+	if af.Filetype == "FLAC" {
+		return mmo.writeFlac(af)
+	}
+	if af.Filetype == "MP3" {
+		return mmo.writeMP3(af)
+	}
+
+	return fmt.Errorf("unknown filetype - don't know what to do: %v, %v", af.Filepath, af.Filetype)
+}
+
+func (mmo *MyMusicOrga) writeMP3(af *AudioFile) error {
+	if af.FrameTypeSource != "ID3v2.3" {
+		log.Infof("this application version could only write id3v2.3 mp3-Frames; got %v mp3-frame", af.FrameTypeSource)
+		return nil
+	}
+	tag, err := id3v2.Open(af.Filepath, id3v2.Options{Parse: true})
+	if err != nil {
+		return fmt.Errorf("could not open mp3 file %s: %v", af.Filepath, err)
+	}
+	defer tag.Close()
+
+	// Set tags
+	// AlbArtist
+	/*
+		textFrame := id3v2.TextFrame{
+			Encoding: id3v2.EncodingUTF8,
+			Text:     af.AlbArtist,
+		}
+	*/
+	// AlbArtist
+	tag.AddTextFrame("TPE2", id3v2.EncodingUTF8, af.AlbArtist)
+	// Album
+	tag.AddTextFrame("TALB", id3v2.EncodingUTF8, af.Album)
+	// Artist
+	tag.AddTextFrame("TPE1", id3v2.EncodingUTF8, af.Artist)
+	// Title
+	tag.AddTextFrame("TIT2", id3v2.EncodingUTF8, af.Title)
+	// CDNum
+	tag.AddTextFrame("TPOS", id3v2.EncodingUTF8, af.CDNum)
+	// TrackNum
+	tag.AddTextFrame("TRCK", id3v2.EncodingUTF8, af.TrackNum)
+	// Genre
+	tag.AddTextFrame("TCON", id3v2.EncodingUTF8, af.Genre)
+	// Year
+	tag.AddTextFrame("TYER", id3v2.EncodingUTF8, af.Year)
+	// Comment
+	/*
+		comment := id3v2.CommentFrame{
+			Encoding:    id3v2.EncodingUTF8,
+			Language:    "eng",
+			Description: "My opinion",
+			Text:        "I like this song!",
+		}
+		tag.AddCommentFrame(comment)
+	*/
+
+	// Write tag to file.mp3
+	if err = tag.Save(); err != nil {
+		return fmt.Errorf("could not save tags to file %s: %v", af.Filepath, err)
+	}
+	return nil
+}
+
+func (mmo *MyMusicOrga) writeFlac(af *AudioFile) error {
+	f, err := flac3.ParseFile(af.Filepath)
+	if err != nil {
+		return fmt.Errorf("could not open flac file to write tags %v: %v", af.Filepath, err)
+	}
+
+	cmts := flacvorbis.New()
+	var curFrame string
+	// AlbArtist
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "AlbArtist", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "AlbArtis")
+	}
+	cmts.Add(curFrame, af.AlbArtist)
+	// Album
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "Album", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "Album")
+	}
+	cmts.Add(curFrame, af.Album)
+	// Artist
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "Artist", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "Artist")
+	}
+	cmts.Add(curFrame, af.Artist)
+	// Title
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "Title", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "Title")
+	}
+	cmts.Add(curFrame, af.Title)
+	// CDNum
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "CDNum", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "CDNum")
+	}
+	cmts.Add(curFrame, af.CDNum)
+	// TrackNum
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "TrackNum", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "TrackNum")
+	}
+	cmts.Add(curFrame, af.TrackNum)
+	// Genre
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "Genre", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "Genre")
+	}
+	cmts.Add(curFrame, af.Genre)
+	// Year
+	curFrame, err = mmo.TagMapping.GetTag("MMO", "Year", "VORBIS")
+	if err != nil {
+		return fmt.Errorf("could not get vorbis tag for %s", "Year")
+	}
+	cmts.Add(curFrame, af.Year)
+
+	for _, et := range af.ExtendedTags {
+		cmts.Add(et[0], et[1])
+	}
+
+	cmtsmeta := cmts.Marshal()
+	f.Meta = append(f.Meta, &cmtsmeta)
+	f.Save(af.Filepath)
+
+	return nil
+}
+
+func (mmo *MyMusicOrga) FLACTest(fp string) error {
+	f, err := flac3.ParseFile(fp)
+	if err != nil {
+		return fmt.Errorf("could not parse flac file %v: %v", fp, err)
+	}
+
+	var cmt *flacvorbis.MetaDataBlockVorbisComment
+	var cmtIdx int
+	for idx, meta := range f.Meta {
+		if meta.Type == flac3.VorbisComment {
+			cmt, err = flacvorbis.ParseFromMetaDataBlock(*meta)
+			cmtIdx = idx
+			if err != nil {
+				panic(err)
+			}
+			fmt.Println(cmtIdx)
+			for i, c := range cmt.Comments {
+				if c == "sepp=mare" {
+					if len(cmt.Comments) > i+1 {
+						cmt.Comments = append(cmt.Comments[:i], cmt.Comments[i+1:]...)
+					} else {
+						cmt.Comments = cmt.Comments[:i]
+					}
+					continue
+				}
+				sepIdx := strings.Index(c, "=")
+				if sepIdx < 0 {
+					fmt.Printf("equalindex < 0 for %v\n", c)
+					continue
+				}
+				fmt.Println(c[:sepIdx], c[sepIdx+1:])
+			}
+
+			cmtsmeta := cmt.Marshal()
+			f.Meta[idx] = &cmtsmeta
+			f.Save(fp)
+		}
+	}
+	return nil
+}
